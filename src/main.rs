@@ -5,33 +5,49 @@ use bevy::window::close_on_esc;
 use lazy_static::*;
 use rand::{prelude::*, Rng};
 use std::f32::consts::PI;
+use std::ops::{Mul, Range};
+use std::time::Duration;
+use bevy_prototype_debug_lines::{DebugLines, DebugLinesPlugin};
+use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
+use smooth_bevy_cameras::controllers::fps::{FpsCameraBundle, FpsCameraController, FpsCameraPlugin};
+
 const NUM_BODIES: usize = 128;
-const BACKGROUND: Color = Color::SILVER;
+const CONNECTION_DISTANCE: f32 = 20000.;
+pub const BACKGROUND: Color = Color::rgb(0.82, 0.82, 0.82);
+const VERTICE_COLOR: Color = Color::BLACK;
+const EDGE_COLOR: Color = Color::BLACK;
+const VERTICE_RADIUS: f32 = 3.0;
+const ELLIPTIC_MOVEMENT_RANGE: Range<f32> = 3.0..15.0;
+const ELLIPTIC_RATIO_RANGE: Range<f32> = 1.0..5.0;
+const ELLIPTIC_MOVEMENT_PERIOD: Duration = Duration::from_millis(1500);
+const VERTICE_BOX_DEPTH: Range<f32> = 0f32..25f32;
+const CONNECTION_DURATION: f32 = 0.1;
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Msaa { samples: 4 })
         .insert_resource(Simulation {
-            scale: 1e5,
+            scale: 2e5,
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
+        .add_plugin(DebugLinesPlugin::default())
+        .add_plugin(LookTransformPlugin)
+        .add_plugin(FpsCameraPlugin::default())
         .add_startup_system(setup)
-        .add_system(nbody_system)
-        .add_system(move_sync_system.after(nbody_system))
+        .add_system(elliptic_movement_system)
+        .add_system(move_sync_system)
         .add_system(close_on_esc)
         .add_system(rotator_system)
-        .add_plugin(FrameTimeDiagnosticsPlugin::default())
-        .add_plugin(LogDiagnosticsPlugin::default())
+        .add_system(local_clustering)
+        // .add_plugin(FrameTimeDiagnosticsPlugin::default())
+        // .add_plugin(LogDiagnosticsPlugin::default())
         .run();
 }
 
 #[derive(Clone, Debug, Default, Component)]
 pub struct Body {
-    mass: f32,
-    acceleration: Vec3A,
-    velocity: Vec3A,
     position: Vec3A,
 }
 
@@ -99,61 +115,31 @@ impl Simulation {
     }
 }
 
-/// this component indicates what entities should rotate
 #[derive(Component)]
 struct Rotates;
 
+// Parametric elliptic equation
+// alpha should be orthogonal to beta
 #[derive(Component)]
-struct Moves;
+struct EllipticMovement {
+    center: Vec3A,
+    alpha: Vec3A,
+    beta: Vec3A,
+    phase: f32,
+}
 
-const G: f32 = 6.674_30E-11;
-const EPSILON: f32 = 1.;
-
-fn nbody_system(
+fn elliptic_movement_system(
     time: Res<Time>,
-    mut simulation: ResMut<Simulation>,
-    mut query: Query<(Entity, &mut Body)>,
+    mut query: Query<(&mut Body, &mut EllipticMovement)>,
 ) {
     let mut bodies = query.iter_mut().collect::<Vec<_>>();
     // dbg!(&bodies);
 
-    // Step simulation in fixed increments
-    simulation.update(&*time);
-    while let Some(dt) = simulation.step() {
-        // Start substeps
-        for substep in 0..3 {
-            // Clear accelerations and update positions
-            for (_, body) in bodies.iter_mut() {
-                body.acceleration = Vec3A::ZERO;
-                let dx = (*CS)[substep] * body.velocity * dt;
-                body.position += dx;
-            }
-
-            // Update accelerations
-            for index1 in 0..bodies.len() {
-                let (bodies1, bodies2) = bodies.split_at_mut(index1 + 1);
-                let (_, body1) = &mut bodies1[index1];
-                for (_, body2) in bodies2.iter_mut() {
-                    let offset = body2.position - body1.position;
-                    let distance_squared = offset.length_squared();
-                    let normalized_offset = offset / distance_squared.sqrt();
-
-                    let da = (G * body2.mass / (distance_squared + EPSILON)) * normalized_offset;
-                    body1.acceleration += da;
-                    body2.acceleration -= da;
-                }
-            }
-
-            // Update velocities
-            for (_, body) in bodies.iter_mut() {
-                let dv = (*DS)[substep] * body.acceleration * dt;
-                body.velocity += dv;
-                if substep == 2 {
-                    let dx = *C4 * body.velocity * dt;
-                    body.position += dx;
-                }
-            }
-        }
+    for (body, movement) in bodies.iter_mut() {
+        let t = time.elapsed_seconds_wrapped() + movement.phase;
+        //By default this will have a period of 2 * Pi unit
+        let t = t * (2. * PI) * 1000. / (ELLIPTIC_MOVEMENT_PERIOD.as_millis() as f32);
+        body.position = movement.center + t.cos() * movement.alpha + t.sin() * movement.beta;
     }
 }
 
@@ -166,63 +152,65 @@ fn setup(
 
     let mesh = meshes.add(
         Mesh::from(shape::Icosphere {
-            radius: 2.0,
+            radius: VERTICE_RADIUS,
             subdivisions: 3,
-        }
-        )
+        })
     );
-
-    let color_range = 0.3..=0.4;
 
     for _index in 0..NUM_BODIES {
         let r = rng.gen_range(2f32..800f32);
         let theta = rng.gen_range(0f32..2.0 * PI);
         let position = Vec3A::new(
             r * f32::cos(theta),
-            rng.gen_range(-500f32..500f32),
+            rng.gen_range(VERTICE_BOX_DEPTH), //Pack the vertices with small depth
             r * f32::sin(theta),
         );
-        let size = rng.gen_range(50f32..1000f32);
-        let greyscale_shade = rng.gen_range(color_range.clone());
+        
+        let elliptic_alpha = Vec3A::new(
+            rng.gen_range(ELLIPTIC_MOVEMENT_RANGE), 
+            rng.gen_range(ELLIPTIC_MOVEMENT_RANGE), 
+            rng.gen_range(ELLIPTIC_MOVEMENT_RANGE)
+        );
+        let elliptic_ratio = rng.gen_range(ELLIPTIC_RATIO_RANGE);
+        let elliptic_beta = elliptic_alpha.any_orthogonal_vector().normalize() * elliptic_alpha.length() * elliptic_ratio; 
+        
         commands.spawn((
             PbrVertice {
                 mesh: mesh.clone(),
                 material: materials.add(StandardMaterial {
-                    base_color: Color::rgb(greyscale_shade,greyscale_shade,greyscale_shade),
+                    emissive: VERTICE_COLOR,
+                    alpha_mode: AlphaMode::Opaque,
                     perceptual_roughness: 1.0,
                     ..default()
                 }),
                 transform: Transform::default(),
                 body: Body {
-                    mass: size,
                     position,
-                    velocity: position.cross(Vec3A::Y).normalize() * 0.00019,
                     ..Default::default()
                 },
                 ..default()
             },
-            Moves,
+            EllipticMovement {
+                center: position,
+                alpha: elliptic_alpha,
+                beta: elliptic_beta,
+                phase: rng.gen_range(0.0..=2.0*PI)
+            }
         ));
     }
 
-    // camera
-    commands.spawn((
-        Camera3dBundle {
-            camera: Camera {
-                hdr: true,
+    commands
+        .spawn(Camera3dBundle::default())
+        .insert(FpsCameraBundle::new(
+            FpsCameraController {
+                translate_sensitivity: 1000.0,
                 ..default()
             },
-            ..default()
-        },
-        bevy::core_pipeline::bloom::BloomSettings {
-            intensity: 0.1,
-            ..default()
-        },
-        Rotates,
-    ));
+            Vec3::new(0.0, 1500.0, 0.0),
+            Vec3::new(0., 0., 0.),
+        ));
 }
 
-    
 fn move_sync_system(mut query: Query<(&mut Body, &mut Transform)>) {
     for (body, mut transform) in query.iter_mut() {
         transform.translation = body.position.into();
@@ -233,12 +221,30 @@ fn rotator_system(time: Res<Time>, mut query: Query<&mut Transform, With<Rotates
     for mut transform in query.iter_mut() {
         let t = time.elapsed_seconds();
         let r = 1100.0;
+        let speed = 0.3;
         *transform = Transform::from_xyz(
-            r * f32::cos(t * 0.1),
-            (t * 0.1).sin() * 2000.0,
-            r * f32::sin(t * 0.1),
+            r * f32::cos(t * speed),
+            (t * speed).sin() * 2000.0,
+            r * f32::sin(t * speed),
         )
-        .looking_at(Vec3::ZERO, Vec3::Y);
+            .looking_at(Vec3::ZERO, Vec3::Y);
+    }
+}
+
+fn local_clustering(mut query: Query<(&GlobalTransform, With<Body>)>, mut lines: ResMut<DebugLines>) {
+    let mut iter = query.iter_combinations_mut();
+    while let Some([(transform1, mut body1), (transform2, mut body2)]) =
+        iter.fetch_next()
+    {
+        let delta = transform2.translation() - transform1.translation();
+        let distance_sq: f32 = delta.length_squared();
+
+        if distance_sq < CONNECTION_DISTANCE {
+            let connection_coefficient = 1.0 - (distance_sq / CONNECTION_DISTANCE);
+            let color_vec = (Vec4::from(EDGE_COLOR) - Vec4::from(BACKGROUND)) * connection_coefficient + Vec4::from(BACKGROUND);
+            let color = Color::from(color_vec);
+            lines.line_colored(transform1.translation(), transform2.translation(), CONNECTION_DURATION, color);
+        }
     }
 }
 
