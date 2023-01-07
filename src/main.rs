@@ -1,14 +1,13 @@
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::math::Vec3A;
 use bevy::prelude::*;
 use bevy::window::close_on_esc;
 use lazy_static::*;
 use rand::{prelude::*, Rng};
 use std::f32::consts::PI;
-use std::ops::{Mul, Range};
+use std::ops::Range;
 use std::time::Duration;
 use bevy_prototype_debug_lines::{DebugLines, DebugLinesPlugin};
-use smooth_bevy_cameras::{LookTransform, LookTransformBundle, LookTransformPlugin, Smoother};
+use smooth_bevy_cameras::LookTransformPlugin;
 use smooth_bevy_cameras::controllers::fps::{FpsCameraBundle, FpsCameraController, FpsCameraPlugin};
 
 const NUM_BODIES: usize = 128;
@@ -21,16 +20,12 @@ const ELLIPTIC_MOVEMENT_RANGE: Range<f32> = 3.0..15.0;
 const ELLIPTIC_RATIO_RANGE: Range<f32> = 1.0..5.0;
 const ELLIPTIC_MOVEMENT_PERIOD: Duration = Duration::from_millis(1500);
 const VERTICE_BOX_DEPTH: Range<f32> = 0f32..25f32;
-const CONNECTION_DURATION: f32 = 0.1;
+const CONNECTION_DURATION: f32 = 0.;
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(BACKGROUND))
         .insert_resource(Msaa { samples: 4 })
-        .insert_resource(Simulation {
-            scale: 2e5,
-            ..Default::default()
-        })
         .add_plugins(DefaultPlugins)
         .add_plugin(DebugLinesPlugin::default())
         .add_plugin(LookTransformPlugin)
@@ -77,41 +72,6 @@ impl<M: Material> Default for VerticeBundle<M> {
             computed_visibility: Default::default(),
             body: Default::default(),
         }
-    }
-}
-
-#[derive(Debug, Resource)]
-struct Simulation {
-    pub accumulator: f32,
-    pub is_paused: bool,
-    pub scale: f32,
-    pub timestep: f32,
-}
-
-impl Default for Simulation {
-    fn default() -> Simulation {
-        Simulation {
-            accumulator: 0.0,
-            is_paused: false,
-            scale: 5e4,
-            timestep: 1. / 30.,
-        }
-    }
-}
-
-impl Simulation {
-    fn update(&mut self, time: &Time) {
-        if !self.is_paused {
-            self.accumulator += time.delta_seconds();
-        }
-    }
-
-    fn step(&mut self) -> Option<f32> {
-        if !self.is_paused && self.accumulator > self.timestep {
-            self.accumulator -= self.timestep;
-            return Some(self.timestep * self.scale);
-        }
-        None
     }
 }
 
@@ -233,7 +193,7 @@ fn rotator_system(time: Res<Time>, mut query: Query<&mut Transform, With<Rotates
 
 fn local_clustering(mut query: Query<(&GlobalTransform, With<Body>)>, mut lines: ResMut<DebugLines>) {
     let mut iter = query.iter_combinations_mut();
-    while let Some([(transform1, mut body1), (transform2, mut body2)]) =
+    while let Some([(transform1, _), (transform2, _)]) =
         iter.fetch_next()
     {
         let delta = transform2.translation() - transform1.translation();

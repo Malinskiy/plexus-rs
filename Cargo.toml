@@ -7,12 +7,9 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.9.1"
-bevy_easings = "0.9.0"
-bevy_polyline = "0.4.0"
 bevy_prototype_debug_lines = { versino ="0.9.0", features = ["3d"]}
 lazy_static = "1.4.0"
 rand = "0.8.5"
-ringbuffer = "0.11"
 smooth-bevy-cameras = "0.6.0"
 
 # Enable a small amount of optimization in debug mode
