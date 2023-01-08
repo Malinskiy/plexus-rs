@@ -13,6 +13,14 @@ you can also experiment with it, e.g. using delay on the connecting edge produce
 
 ![](./assets/plexus-delay.gif "delay")
 
+### Dark
+![](./assets/plexus-dark.gif "dark")
+
+and a version with 1k dots
+
+![](./assets/plexus-1k-dark.gif "1k")
+
+
 # License
 ```
 This program is free software; you can redistribute it and/or
